@@ -110,7 +110,6 @@ typedef struct __attribute__ ((packed)) vl_generic_reply_s {
 typedef enum op_type_e {
     CREATE_MEMIF = 0,
     DELETE_MEMIF = 1,
-    SET_SOCKET_FILENAME = 2,
     DUMP_MEMIF = 3
 } op_type_t;
 
@@ -294,17 +293,17 @@ int
 main (int argc, char **argv)
 {
     int rv = 0;
-    char *filename = NULL, c = 0;
+    char *socket = NULL, c = 0;
     u8 role = 0;
     u64 key = 0;
     u32 ring_size = 0;
     op_type_t op = CREATE_MEMIF;
 
     struct option longopts[] = {
-       { "filename",  required_argument, NULL, 'f' },
+       { "socket",    required_argument, NULL, 's' },
        { "role",      required_argument, NULL, 'r' },
        { "key",       required_argument, NULL, 'k' },
-       { "ring-size", required_argument, NULL, 's' },
+       { "ring-size", required_argument, NULL, 'g' },
        { "mac",       required_argument, NULL, 'm' },
        { 0, 0, 0, 0 }
     };
@@ -316,8 +315,8 @@ main (int argc, char **argv)
     int curind = optind;
     while ((c = getopt_long(argc, argv, "f:r:k:s:m:", longopts, NULL)) != -1) {
         switch (c) {
-            case 'f':
-                filename = optarg;
+            case 's':
+                socket = optarg;
                 break;
 	    case 'r':
                 if (0 == strcmp(optarg, "master")) {
@@ -332,13 +331,12 @@ main (int argc, char **argv)
 	    case 'k':
                 key = atoi(optarg);
                 break;
-	    case 's':
+	    case 'g':
                 ring_size = atoi(optarg);
                 break;
 	    case 'm':
-		fprintf(stderr, "MAC not implemented!\n");
+		fprintf(stderr, "MAC is not yet implemented!\n");
 		goto cleanup;
-
             case ':':
                 /* missing option argument */
                 fprintf(stderr, "%s: Option '-%c' requires an argument.\n", argv[0], optopt);
@@ -366,9 +364,7 @@ main (int argc, char **argv)
 	    op = CREATE_MEMIF;
 	} else if (0 == strcmp(argv[optind], "delete")) {
 	    op = DELETE_MEMIF;
-	} else if (0 == strcmp(argv[optind], "socket")) {
-	    op = SET_SOCKET_FILENAME;
-	}  else if (0 == strcmp(argv[optind], "dump")) {
+	} else if (0 == strcmp(argv[optind], "dump")) {
 	    op = DUMP_MEMIF;
         } else {
 	    fprintf(stderr, "Unsupported binary API.\n");
@@ -392,7 +388,6 @@ main (int argc, char **argv)
     ma_ctx.ping_msg_id = VL_API_CONTROL_PING;
     ma_ctx.ping_reply_msg_id = VL_API_CONTROL_PING_REPLY;
 
-    vpp_setup_handler(VL_API_MEMIF_SET_SOCKET_FILENAME_REPLY, memif_set_socket_filename);
     vpp_setup_handler(VL_API_MEMIF_CREATE_REPLY, memif_create);
     vpp_setup_handler(VL_API_MEMIF_DELETE_REPLY, memif_delete);
     vpp_setup_handler(VL_API_CONTROL_PING_REPLY, control_ping_reply);
@@ -407,6 +402,10 @@ main (int argc, char **argv)
 	    create_req->key = htobe64(key);
 	    create_req->role = role;
 	    create_req->ring_size = htonl(ring_size);
+	    if (NULL != socket) {
+                strncpy((char *)create_req->socket_filename, socket, 128);
+	    }
+	    // TODO: mac
             rv = vpp_send_request(create_req, false);
 	    create_resp = (vl_api_memif_create_reply_t *)ma_ctx.reply.msgs[0].msg;
             if (rv < 0) {
@@ -432,23 +431,6 @@ main (int argc, char **argv)
 	    break;
 	}
 
-        case SET_SOCKET_FILENAME:
-        {
-            vl_api_memif_set_socket_filename_t *sock_filename_req = NULL;
-            sock_filename_req = vpp_alloc_msg(VL_API_MEMIF_SET_SOCKET_FILENAME,
-                                              sizeof(*sock_filename_req));
-	    if (NULL != filename) {
-                strncpy((char *)sock_filename_req->filename, filename, 128);
-	    }
-            rv = vpp_send_request(sock_filename_req, false);
-            if (rv < 0) {
-        	fprintf(stderr, "Set-socket-filename request has failed with rv=%d.\n", rv);
-            } else {
-                printf("Memif socket filename was set to %s, rv = %d\n", filename, rv);
-            }
-	    break;
-	}
-
 	case DUMP_MEMIF:
         {
             vl_api_memif_dump_t *dump_req = NULL;
@@ -467,7 +449,7 @@ main (int argc, char **argv)
 			   details->hw_addr[3], details->hw_addr[4], details->hw_addr[5]);
 		    printf(" -> key = %lu\n", be64toh(details->key));
 		    printf(" -> role = %s\n", 0 == details->role ? "master" : "slave");
-		    printf(" -> socket = %s\n", details->socket);
+		    printf(" -> socket = %s\n", details->socket_filename);
 		    printf(" -> ring size = %d\n", ntohl(details->ring_size));
 		    printf(" -> admin_up_down = %s\n", 0 == details->admin_up_down ? "down" : "up");
 		    printf(" -> link_up_down = %s\n", 0 == details->link_up_down ? "down" : "up");

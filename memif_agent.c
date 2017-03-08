@@ -81,6 +81,7 @@ typedef struct ma_ctx_s {
     u32 req_ctx;
     ma_reply_t reply;
     u16 ping_msg_id;
+    u16 ping_reply_msg_id;
 } ma_ctx_t;
 
 ma_ctx_t ma_ctx = {0};
@@ -158,7 +159,7 @@ vpp_receive_msg_handler(void *msg)
     msg_header = (msgbuf_t *) (((u8 *) msg) - offsetof(msgbuf_t, data));
     msg_size = ntohl(msg_header->data_len);
     reply = (vl_generic_reply_t *) msg;
-    printf("New message received from VPP (id=%d, size=%zu).\n", reply->_vl_msg_id, msg_size);
+    printf("New message received from VPP (id=%d, size=%zu).\n", ntohs(reply->_vl_msg_id), msg_size);
 
     if (ma_ctx.req_ctx != reply->context) {
         fprintf(stderr, "Invalid request context for provided message, ignoring the message.\n");
@@ -166,7 +167,7 @@ vpp_receive_msg_handler(void *msg)
         goto signal;
     }
 
-    if (ma_ctx.ping_msg_id != ntohs(reply->_vl_msg_id)) {
+    if (ma_ctx.ping_reply_msg_id != ntohs(reply->_vl_msg_id)) {
 	/* store the message */
         rv = reply->retval;
         ma_ctx.reply.msgs = realloc(ma_ctx.reply.msgs, (++ma_ctx.reply.cnt) * sizeof(ma_msg_t));
@@ -191,7 +192,7 @@ signal:
     if (0 == ma_ctx.reply.retval) {
         ma_ctx.reply.retval = rv;
     }
-    if (!ma_ctx.reply.multiple || ma_ctx.ping_msg_id == ntohs(reply->_vl_msg_id)) {
+    if (!ma_ctx.reply.multiple || ma_ctx.ping_reply_msg_id == ntohs(reply->_vl_msg_id)) {
 	ma_ctx.reply.complete = true;
 	pthread_cond_signal(&ma_ctx.reply_cv);
     }
@@ -231,7 +232,7 @@ vpp_send_request(void *request, bool multiple_replies)
 
     req = (vl_generic_request_t *) request;
     req->context = context;
-    printf("Sending a request to VPP (id=%d).\n", req->_vl_msg_id);
+    printf("Sending a request to VPP (id=%d).\n", ntohs(req->_vl_msg_id));
 
     pthread_mutex_lock(&ma_ctx.lock);
     ma_ctx.req_ctx = context;
@@ -243,6 +244,7 @@ vpp_send_request(void *request, bool multiple_replies)
     if (multiple_replies) {
 	ping = vpp_alloc_msg(ma_ctx.ping_msg_id, sizeof(*ping));
 	ping->context = context;
+        printf("Sending a (ping) request to VPP (id=%d).\n", ntohs(ping->_vl_msg_id));
         vl_msg_api_send_shmem(ma_ctx.vlib_input_queue, (u8*)&ping);
     }
 
@@ -387,14 +389,14 @@ main (int argc, char **argv)
     foreach_vl_msg_name_crc_memif;
 #undef _
 
-    ma_ctx.ping_msg_id = VL_API_CONTROL_PING_REPLY;
-    printf("Ping id is %d\n", ma_ctx.ping_msg_id);
+    ma_ctx.ping_msg_id = VL_API_CONTROL_PING;
+    ma_ctx.ping_reply_msg_id = VL_API_CONTROL_PING_REPLY;
 
     vpp_setup_handler(VL_API_MEMIF_SET_SOCKET_FILENAME_REPLY, memif_set_socket_filename);
     vpp_setup_handler(VL_API_MEMIF_CREATE_REPLY, memif_create);
     vpp_setup_handler(VL_API_MEMIF_DELETE_REPLY, memif_delete);
     vpp_setup_handler(VL_API_CONTROL_PING_REPLY, control_ping_reply);
-    vpp_setup_handler(VL_API_MEMIF_DETAIL, memif_dump);
+    vpp_setup_handler(VL_API_MEMIF_DETAILS, memif_details);
 
     switch (op) {
         case CREATE_MEMIF:
@@ -402,9 +404,9 @@ main (int argc, char **argv)
             vl_api_memif_create_t *create_req = NULL;
             vl_api_memif_create_reply_t *create_resp = NULL;
             create_req = vpp_alloc_msg(VL_API_MEMIF_CREATE, sizeof(*create_req));
-	    create_req->key = key;
+	    create_req->key = htobe64(key);
 	    create_req->role = role;
-	    create_req->ring_size = ring_size;
+	    create_req->ring_size = htonl(ring_size);
             rv = vpp_send_request(create_req, false);
 	    create_resp = (vl_api_memif_create_reply_t *)ma_ctx.reply.msgs[0].msg;
             if (rv < 0) {
@@ -459,16 +461,16 @@ main (int argc, char **argv)
 		for (size_t i = 0; i < ma_ctx.reply.cnt; ++i) {
 		    vl_api_memif_details_t *details = ma_ctx.reply.msgs[i].msg;
 		    printf("Memif %s:\n", details->if_name);
-		    printf(" -> sw_if_index = %d:\n", ntohl(details->sw_if_index));
+		    printf(" -> sw_if_index = %d\n", ntohl(details->sw_if_index));
 		    printf(" -> MAC = %02X:%02X:%02X:%02X:%02X:%02X\n",
 			   details->hw_addr[0], details->hw_addr[1], details->hw_addr[2],
 			   details->hw_addr[3], details->hw_addr[4], details->hw_addr[5]);
-		    printf(" -> key = %lu:\n", be64toh(details->key));
-		    printf(" -> role = %s:\n", 0 == details->role ? "master" : "slave");
-		    printf(" -> socket = %s:\n", details->socket);
-		    printf(" -> ring size = %d:\n", ntohl(details->ring_size));
-		    printf(" -> admin_up_down = %s:\n", 0 == details->admin_up_down ? "down" : "up");
-		    printf(" -> link_up_down = %s:\n", 0 == details->link_up_down ? "down" : "up");
+		    printf(" -> key = %lu\n", be64toh(details->key));
+		    printf(" -> role = %s\n", 0 == details->role ? "master" : "slave");
+		    printf(" -> socket = %s\n", details->socket);
+		    printf(" -> ring size = %d\n", ntohl(details->ring_size));
+		    printf(" -> admin_up_down = %s\n", 0 == details->admin_up_down ? "down" : "up");
+		    printf(" -> link_up_down = %s\n", 0 == details->link_up_down ? "down" : "up");
 		    printf("\n");
 		}
             }

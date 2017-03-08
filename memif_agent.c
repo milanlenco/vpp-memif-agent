@@ -289,6 +289,24 @@ vpp_disconnect()
     vl_client_disconnect_from_vlib();
 }
 
+static void
+print_help()
+{
+    printf("Usage:\n");
+    printf("  memif_agent [options] <operation>\n\n");
+    printf("Available options:\n");
+    printf("  -h, --help             Print usage help and exit.\n");
+    printf("  -s, --socket           Socket file path (create only).\n");
+    printf("  -r, --role             master/slave (create only).\n");
+    printf("  -k, --key              Key associated with memif (create, delete).\n");
+    printf("  -g, --ring_size        Number of entries of RX/TX rings (create only).\n");
+    printf("  -m, --mac              MAC address (create only).\n");
+    printf("Supported operations:\n");
+    printf("  create                 Create memory interface.\n");
+    printf("  delete                 Delete memory interface.\n");
+    printf("  dump                   Dump all memory interfaces.\n");
+}
+
 int
 main (int argc, char **argv)
 {
@@ -300,6 +318,7 @@ main (int argc, char **argv)
     op_type_t op = CREATE_MEMIF;
 
     struct option longopts[] = {
+       { "help",      no_argument,       NULL, 'h' },
        { "socket",    required_argument, NULL, 's' },
        { "role",      required_argument, NULL, 'r' },
        { "key",       required_argument, NULL, 'k' },
@@ -313,8 +332,11 @@ main (int argc, char **argv)
 
     /* parse options */
     int curind = optind;
-    while ((c = getopt_long(argc, argv, "f:r:k:s:m:", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hf:r:k:s:m:", longopts, NULL)) != -1) {
         switch (c) {
+            case 'h':
+                print_help();
+                goto cleanup;
             case 's':
                 socket = optarg;
                 break;

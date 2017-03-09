@@ -296,6 +296,7 @@ print_help()
     printf("  memif_agent [options] <operation>\n\n");
     printf("Available options:\n");
     printf("  -h, --help             Print usage help and exit.\n");
+    printf("  -i, --index            Software interface index (delete only).\n");
     printf("  -s, --socket           Socket file path (create only).\n");
     printf("  -r, --role             master/slave (create only).\n");
     printf("  -k, --key              Key associated with memif (create, delete).\n");
@@ -314,13 +315,14 @@ main (int argc, char **argv)
     char *socket = NULL, c = 0;
     u8 role = 0;
     u64 key = 0;
-    u32 ring_size = 0;
+    u32 sw_if_index = 0, ring_size = 0;
     u8 hw_addr[6] = {0};
     u32 hw_addr_input[6] = {0};
     op_type_t op = CREATE_MEMIF;
 
     struct option longopts[] = {
        { "help",      no_argument,       NULL, 'h' },
+       { "index",     required_argument, NULL, 'i' },
        { "socket",    required_argument, NULL, 's' },
        { "role",      required_argument, NULL, 'r' },
        { "key",       required_argument, NULL, 'k' },
@@ -334,11 +336,14 @@ main (int argc, char **argv)
 
     /* parse options */
     int curind = optind;
-    while ((c = getopt_long(argc, argv, "hf:r:k:s:m:", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hi:s:r:k:g:m:", longopts, NULL)) != -1) {
         switch (c) {
             case 'h':
                 print_help();
                 goto cleanup;
+	    case 'i':
+                sw_if_index = atoi(optarg);
+                break;
             case 's':
                 socket = optarg;
                 break;
@@ -449,7 +454,7 @@ main (int argc, char **argv)
         {
             vl_api_memif_delete_t *delete_req = NULL;
             delete_req = vpp_alloc_msg(VL_API_MEMIF_DELETE, sizeof(*delete_req));
-	    delete_req->key = key;
+	    delete_req->sw_if_index = htonl(sw_if_index);
             rv = vpp_send_request(delete_req, false);
             if (rv < 0) {
         	fprintf(stderr, "Delete-memif request has failed with rv=%d.\n", rv);

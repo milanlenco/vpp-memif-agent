@@ -315,6 +315,8 @@ main (int argc, char **argv)
     u8 role = 0;
     u64 key = 0;
     u32 ring_size = 0;
+    u8 hw_addr[6] = {0};
+    u32 hw_addr_input[6] = {0};
     op_type_t op = CREATE_MEMIF;
 
     struct option longopts[] = {
@@ -357,8 +359,12 @@ main (int argc, char **argv)
                 ring_size = atoi(optarg);
                 break;
 	    case 'm':
-		fprintf(stderr, "MAC is not yet implemented!\n");
-		goto cleanup;
+		sscanf(optarg, "%x:%x:%x:%x:%x:%x", hw_addr_input, hw_addr_input+1, hw_addr_input+2,
+		                                    hw_addr_input+3, hw_addr_input+4, hw_addr_input+5);
+		for (int i = 0; i < 6; ++i) {
+		    hw_addr[i] = hw_addr_input[i] & 0xff;
+		}
+		break;
             case ':':
                 /* missing option argument */
                 fprintf(stderr, "%s: Option '-%c' requires an argument.\n", argv[0], optopt);
@@ -427,7 +433,7 @@ main (int argc, char **argv)
 	    if (NULL != socket) {
                 strncpy((char *)create_req->socket_filename, socket, 128);
 	    }
-	    // TODO: mac
+	    memcpy(create_req->hw_addr, hw_addr, 6);
             rv = vpp_send_request(create_req, false);
 	    create_resp = (vl_api_memif_create_reply_t *)ma_ctx.reply.msgs[0].msg;
             if (rv < 0) {

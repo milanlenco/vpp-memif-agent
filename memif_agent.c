@@ -113,6 +113,12 @@ typedef enum op_type_e {
     DUMP_MEMIF = 3
 } op_type_t;
 
+/*
+ * Satisfy external references when -lvlib is not available.
+ */
+vlib_main_t vlib_global_main;
+vlib_main_t **vlib_mains;
+
 /**
  * @brief Not used, just to satisfy external references when -lvlib is not available.
  */
@@ -301,6 +307,7 @@ print_help()
     printf("  -r, --role             master/slave (create only).\n");
     printf("  -k, --key              Key associated with memif (create, delete).\n");
     printf("  -g, --ring_size        Number of entries of RX/TX rings (create only).\n");
+    printf("  -b, --buffer_size      Size of the buffer allocated for each ring entry.\n");
     printf("  -m, --mac              MAC address (create only).\n");
     printf("Supported operations:\n");
     printf("  create                 Create memory interface.\n");
@@ -316,18 +323,21 @@ main (int argc, char **argv)
     u8 role = 0;
     u64 key = 0;
     u32 sw_if_index = 0, ring_size = 0;
+    u16 buffer_size = 0;
     u8 hw_addr[6] = {0};
     u32 hw_addr_input[6] = {0};
     op_type_t op = CREATE_MEMIF;
+    char *str = 0;
 
     struct option longopts[] = {
-       { "help",      no_argument,       NULL, 'h' },
-       { "index",     required_argument, NULL, 'i' },
-       { "socket",    required_argument, NULL, 's' },
-       { "role",      required_argument, NULL, 'r' },
-       { "key",       required_argument, NULL, 'k' },
-       { "ring-size", required_argument, NULL, 'g' },
-       { "mac",       required_argument, NULL, 'm' },
+       { "help",        no_argument,       NULL, 'h' },
+       { "index",       required_argument, NULL, 'i' },
+       { "socket",      required_argument, NULL, 's' },
+       { "role",        required_argument, NULL, 'r' },
+       { "key",         required_argument, NULL, 'k' },
+       { "ring-size",   required_argument, NULL, 'g' },
+       { "buffer-size", required_argument, NULL, 'b' },
+       { "mac",         required_argument, NULL, 'm' },
        { 0, 0, 0, 0 }
     };
 
@@ -336,7 +346,7 @@ main (int argc, char **argv)
 
     /* parse options */
     int curind = optind;
-    while ((c = getopt_long(argc, argv, "hi:s:r:k:g:m:", longopts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "hi:s:r:b:k:g:m:", longopts, NULL)) != -1) {
         switch (c) {
             case 'h':
                 print_help();
@@ -358,10 +368,13 @@ main (int argc, char **argv)
 		}
                 break;
 	    case 'k':
-                key = atoi(optarg);
+                key = strtoull(optarg, &str, 10);
                 break;
 	    case 'g':
                 ring_size = atoi(optarg);
+                break;
+	    case 'b':
+                buffer_size = atoi(optarg);
                 break;
 	    case 'm':
 		sscanf(optarg, "%x:%x:%x:%x:%x:%x", hw_addr_input, hw_addr_input+1, hw_addr_input+2,
@@ -435,6 +448,7 @@ main (int argc, char **argv)
 	    create_req->key = htobe64(key);
 	    create_req->role = role;
 	    create_req->ring_size = htonl(ring_size);
+	    create_req->buffer_size = htons(buffer_size);
 	    if (NULL != socket) {
                 strncpy((char *)create_req->socket_filename, socket, 128);
 	    }
@@ -484,6 +498,7 @@ main (int argc, char **argv)
 		    printf(" -> role = %s\n", 0 == details->role ? "master" : "slave");
 		    printf(" -> socket = %s\n", details->socket_filename);
 		    printf(" -> ring size = %d\n", ntohl(details->ring_size));
+		    printf(" -> buffer size = %d\n", ntohs(details->buffer_size));
 		    printf(" -> admin_up_down = %s\n", 0 == details->admin_up_down ? "down" : "up");
 		    printf(" -> link_up_down = %s\n", 0 == details->link_up_down ? "down" : "up");
 		    printf("\n");

@@ -110,7 +110,8 @@ typedef struct __attribute__ ((packed)) vl_generic_reply_s {
 typedef enum op_type_e {
     CREATE_MEMIF = 0,
     DELETE_MEMIF = 1,
-    DUMP_MEMIF = 3
+    DUMP_MEMIF = 3,
+    WATCH = 4
 } op_type_t;
 
 /*
@@ -167,13 +168,14 @@ vpp_receive_msg_handler(void *msg)
     printf("New message received from VPP (id=%d, size=%zu).\n", ntohs(reply->_vl_msg_id), msg_size);
 
     if (ma_ctx.req_ctx != reply->context) {
-        fprintf(stderr, "Invalid request context for provided message, ignoring the message.\n");
-        rv = -1;
-        goto signal;
+        fprintf(stderr, "Warning: Invalid request context in received message (%d, expected: %d).\n",
+		reply->context, ma_ctx.req_ctx);
+        //rv = -1;
+        //goto signal;
     }
 
     if (ma_ctx.ping_reply_msg_id != ntohs(reply->_vl_msg_id)) {
-	/* store the message */
+        /* store the message */
         rv = reply->retval;
         ma_ctx.reply.msgs = realloc(ma_ctx.reply.msgs, (++ma_ctx.reply.cnt) * sizeof(ma_msg_t));
         if (NULL == ma_ctx.reply.msgs) {
@@ -181,7 +183,7 @@ vpp_receive_msg_handler(void *msg)
             rv = -1;
             goto signal;
         }
-    
+
         ma_ctx.reply.msgs[ma_ctx.reply.cnt-1].msg = malloc(msg_size);
         if (NULL == ma_ctx.reply.msgs[ma_ctx.reply.cnt-1].msg) {
             fprintf(stderr, "Memory allocation has failed.\n");
@@ -198,8 +200,8 @@ signal:
         ma_ctx.reply.retval = rv;
     }
     if (!ma_ctx.reply.multiple || ma_ctx.ping_reply_msg_id == ntohs(reply->_vl_msg_id)) {
-	ma_ctx.reply.complete = true;
-	pthread_cond_signal(&ma_ctx.reply_cv);
+        ma_ctx.reply.complete = true;
+        pthread_cond_signal(&ma_ctx.reply_cv);
     }
     pthread_mutex_unlock(&ma_ctx.lock);
 }
@@ -217,7 +219,7 @@ vpp_alloc_msg(uint16_t msg_id, size_t msg_size)
         memset(req, 0, msg_size);
         req->_vl_msg_id = htons(msg_id);
         req->client_index = ma_ctx.vlib_client_index;
-	req->context = 0;
+        req->context = 0;
     } else {
         fprintf(stderr, "Memory allocation has failed.\n");
     }
@@ -247,8 +249,8 @@ vpp_send_request(void *request, bool multiple_replies)
     vl_msg_api_send_shmem(ma_ctx.vlib_input_queue, (u8*)&req);
 
     if (multiple_replies) {
-	ping = vpp_alloc_msg(ma_ctx.ping_msg_id, sizeof(*ping));
-	ping->context = context;
+        ping = vpp_alloc_msg(ma_ctx.ping_msg_id, sizeof(*ping));
+        ping->context = context;
         printf("Sending a (ping) request to VPP (id=%d).\n", ntohs(ping->_vl_msg_id));
         vl_msg_api_send_shmem(ma_ctx.vlib_input_queue, (u8*)&ping);
     }
@@ -313,6 +315,7 @@ print_help()
     printf("  create                 Create memory interface.\n");
     printf("  delete                 Delete memory interface.\n");
     printf("  dump                   Dump all memory interfaces.\n");
+    printf("  watch                  Watch for interface events.\n");
 }
 
 int
@@ -351,38 +354,38 @@ main (int argc, char **argv)
             case 'h':
                 print_help();
                 goto cleanup;
-	    case 'i':
+            case 'i':
                 sw_if_index = atoi(optarg);
                 break;
             case 's':
                 socket = optarg;
                 break;
-	    case 'r':
+            case 'r':
                 if (0 == strcmp(optarg, "master")) {
-		    role = 0;
-		} if (0 == strcmp(optarg, "slave")) {
-		    role = 1;
-		} else {
-		    fprintf(stderr, "Invalid value for 'role' option.\n");
-		    goto cleanup;
-		}
+                    role = 0;
+                } if (0 == strcmp(optarg, "slave")) {
+                    role = 1;
+                } else {
+                    fprintf(stderr, "Invalid value for 'role' option.\n");
+                    goto cleanup;
+                }
                 break;
-	    case 'k':
+            case 'k':
                 key = strtoull(optarg, &str, 10);
                 break;
-	    case 'g':
+            case 'g':
                 ring_size = atoi(optarg);
                 break;
-	    case 'b':
+            case 'b':
                 buffer_size = atoi(optarg);
                 break;
-	    case 'm':
-		sscanf(optarg, "%x:%x:%x:%x:%x:%x", hw_addr_input, hw_addr_input+1, hw_addr_input+2,
-		                                    hw_addr_input+3, hw_addr_input+4, hw_addr_input+5);
-		for (int i = 0; i < 6; ++i) {
-		    hw_addr[i] = hw_addr_input[i] & 0xff;
-		}
-		break;
+            case 'm':
+                sscanf(optarg, "%x:%x:%x:%x:%x:%x", hw_addr_input, hw_addr_input+1, hw_addr_input+2,
+                                                    hw_addr_input+3, hw_addr_input+4, hw_addr_input+5);
+                for (int i = 0; i < 6; ++i) {
+                    hw_addr[i] = hw_addr_input[i] & 0xff;
+                }
+                break;
             case ':':
                 /* missing option argument */
                 fprintf(stderr, "%s: Option '-%c' requires an argument.\n", argv[0], optopt);
@@ -404,18 +407,20 @@ main (int argc, char **argv)
     if (optind < argc) {
         if ((argc - optind) != 1) {
             fprintf(stderr, "Too many non-option arguments given (%d). Exiting.\n", (argc - optind));
-	    goto cleanup;
+            goto cleanup;
         }
         if (0 == strcmp(argv[optind], "create")) {
-	    op = CREATE_MEMIF;
-	} else if (0 == strcmp(argv[optind], "delete")) {
-	    op = DELETE_MEMIF;
-	} else if (0 == strcmp(argv[optind], "dump")) {
-	    op = DUMP_MEMIF;
+            op = CREATE_MEMIF;
+        } else if (0 == strcmp(argv[optind], "delete")) {
+            op = DELETE_MEMIF;
+        } else if (0 == strcmp(argv[optind], "dump")) {
+            op = DUMP_MEMIF;
+        } else if (0 == strcmp(argv[optind], "watch")) {
+            op = WATCH;
         } else {
-	    fprintf(stderr, "Unsupported binary API.\n");
-	    goto cleanup;
-	}
+            fprintf(stderr, "Unsupported binary API.\n");
+            goto cleanup;
+        }
     }
 
     rv = vpp_connect();
@@ -426,8 +431,10 @@ main (int argc, char **argv)
 #define _(id,n,crc) \
     const char *id ## _CRC = #n "_" #crc; \
     const u32 id = vl_api_get_msg_index((u8 *)(id ## _CRC)); \
+    printf("%s = %d\n", id ## _CRC, id); \
     (void )id;
     foreach_vl_msg_name_crc_vpe;
+    foreach_vl_msg_name_crc_interface;
     foreach_vl_msg_name_crc_memif;
 #undef _
 
@@ -438,6 +445,8 @@ main (int argc, char **argv)
     vpp_setup_handler(VL_API_MEMIF_DELETE_REPLY, memif_delete);
     vpp_setup_handler(VL_API_CONTROL_PING_REPLY, control_ping_reply);
     vpp_setup_handler(VL_API_MEMIF_DETAILS, memif_details);
+    vpp_setup_handler(VL_API_WANT_INTERFACE_EVENTS_REPLY, want_interface_events_reply);
+    vpp_setup_handler(VL_API_SW_INTERFACE_SET_FLAGS, sw_interface_set_flags);
 
     switch (op) {
         case CREATE_MEMIF:
@@ -445,67 +454,97 @@ main (int argc, char **argv)
             vl_api_memif_create_t *create_req = NULL;
             vl_api_memif_create_reply_t *create_resp = NULL;
             create_req = vpp_alloc_msg(VL_API_MEMIF_CREATE, sizeof(*create_req));
-	    create_req->key = htobe64(key);
-	    create_req->role = role;
-	    create_req->ring_size = htonl(ring_size);
-	    create_req->buffer_size = htons(buffer_size);
-	    if (NULL != socket) {
+            create_req->key = htobe64(key);
+            create_req->role = role;
+            create_req->ring_size = htonl(ring_size);
+            create_req->buffer_size = htons(buffer_size);
+            if (NULL != socket) {
                 strncpy((char *)create_req->socket_filename, socket, 128);
-	    }
-	    memcpy(create_req->hw_addr, hw_addr, 6);
+            }
+            memcpy(create_req->hw_addr, hw_addr, 6);
             rv = vpp_send_request(create_req, false);
-	    create_resp = (vl_api_memif_create_reply_t *)ma_ctx.reply.msgs[0].msg;
+            create_resp = (vl_api_memif_create_reply_t *)ma_ctx.reply.msgs[0].msg;
             if (rv < 0) {
-        	fprintf(stderr, "Create-memif request has failed with rv=%d.\n", rv);
+                fprintf(stderr, "Create-memif request has failed with rv=%d.\n", rv);
             } else {
                 printf("Memif key=%lu, sw_if_index=%d was created, rv = %d\n",
-		       key, ntohl(create_resp->sw_if_index), rv);
+                       key, ntohl(create_resp->sw_if_index), rv);
             }
-	    break;
-	}
+            break;
+        }
 
-	case DELETE_MEMIF:
+        case DELETE_MEMIF:
         {
             vl_api_memif_delete_t *delete_req = NULL;
             delete_req = vpp_alloc_msg(VL_API_MEMIF_DELETE, sizeof(*delete_req));
-	    delete_req->sw_if_index = htonl(sw_if_index);
+            delete_req->sw_if_index = htonl(sw_if_index);
             rv = vpp_send_request(delete_req, false);
             if (rv < 0) {
-        	fprintf(stderr, "Delete-memif request has failed with rv=%d.\n", rv);
+                fprintf(stderr, "Delete-memif request has failed with rv=%d.\n", rv);
             } else {
                 printf("Memif key=%lu was deleted, rv = %d\n", key, rv);
             }
-	    break;
-	}
+            break;
+        }
 
-	case DUMP_MEMIF:
+        case DUMP_MEMIF:
         {
             vl_api_memif_dump_t *dump_req = NULL;
             dump_req = vpp_alloc_msg(VL_API_MEMIF_DUMP,
                                      sizeof(*dump_req));
             rv = vpp_send_request(dump_req, true);
             if (rv < 0) {
-        	fprintf(stderr, "Dump request has failed with rv=%d.\n", rv);
+                fprintf(stderr, "Dump request has failed with rv=%d.\n", rv);
             } else {
-		for (size_t i = 0; i < ma_ctx.reply.cnt; ++i) {
-		    vl_api_memif_details_t *details = ma_ctx.reply.msgs[i].msg;
-		    printf("Memif %s:\n", details->if_name);
-		    printf(" -> sw_if_index = %d\n", ntohl(details->sw_if_index));
-		    printf(" -> MAC = %02X:%02X:%02X:%02X:%02X:%02X\n",
-			   details->hw_addr[0], details->hw_addr[1], details->hw_addr[2],
-			   details->hw_addr[3], details->hw_addr[4], details->hw_addr[5]);
-		    printf(" -> key = %lu\n", be64toh(details->key));
-		    printf(" -> role = %s\n", 0 == details->role ? "master" : "slave");
-		    printf(" -> socket = %s\n", details->socket_filename);
-		    printf(" -> ring size = %d\n", ntohl(details->ring_size));
-		    printf(" -> buffer size = %d\n", ntohs(details->buffer_size));
-		    printf(" -> admin_up_down = %s\n", 0 == details->admin_up_down ? "down" : "up");
-		    printf(" -> link_up_down = %s\n", 0 == details->link_up_down ? "down" : "up");
-		    printf("\n");
-		}
+                for (size_t i = 0; i < ma_ctx.reply.cnt; ++i) {
+                    vl_api_memif_details_t *details = ma_ctx.reply.msgs[i].msg;
+                    printf("Memif %s:\n", details->if_name);
+                    printf(" -> sw_if_index = %d\n", ntohl(details->sw_if_index));
+                    printf(" -> MAC = %02X:%02X:%02X:%02X:%02X:%02X\n",
+                           details->hw_addr[0], details->hw_addr[1], details->hw_addr[2],
+                           details->hw_addr[3], details->hw_addr[4], details->hw_addr[5]);
+                    printf(" -> key = %lu\n", be64toh(details->key));
+                    printf(" -> role = %s\n", 0 == details->role ? "master" : "slave");
+                    printf(" -> socket = %s\n", details->socket_filename);
+                    printf(" -> ring size = %d\n", ntohl(details->ring_size));
+                    printf(" -> buffer size = %d\n", ntohs(details->buffer_size));
+                    printf(" -> admin_up_down = %s\n", 0 == details->admin_up_down ? "down" : "up");
+                    printf(" -> link_up_down = %s\n", 0 == details->link_up_down ? "down" : "up");
+                    printf("\n");
+                }
             }
-	    break;
-	}
+            break;
+        }
+
+        case WATCH:
+        {
+            vl_api_want_interface_events_t *events_req = NULL;
+            int cursor = 1;
+            events_req = vpp_alloc_msg(VL_API_WANT_INTERFACE_EVENTS, sizeof(*events_req));
+            events_req->enable_disable = htonl(1);
+            events_req->pid = htonl(getpid());
+            rv = vpp_send_request(events_req, false);
+            if (rv < 0) {
+                fprintf(stderr, "Want-interface-events request has failed with rv=%d.\n", rv);
+            } else {
+                printf("Watching for interface events...\n");
+                pthread_mutex_lock(&ma_ctx.lock);
+                while (1) {
+                    for (; cursor < ma_ctx.reply.cnt; ++cursor) {
+                        vl_api_sw_interface_set_flags_t *flags = ma_ctx.reply.msgs[cursor].msg;
+                        printf("Interface status change:\n");
+                        printf(" -> sw_if_index = %d\n", ntohl(flags->sw_if_index));
+                        printf(" -> admin_up_down = %s\n", 0 == flags->admin_up_down ? "down" : "up");
+                        printf(" -> link_up_down = %s\n", 0 == flags->link_up_down ? "down" : "up");
+                        printf("\n");
+                    }
+                    pthread_cond_wait(&ma_ctx.reply_cv, &ma_ctx.lock);
+                }
+                pthread_mutex_unlock(&ma_ctx.lock);
+            }
+            break;
+        }
+
 
     }
 

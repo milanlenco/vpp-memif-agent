@@ -431,7 +431,6 @@ main (int argc, char **argv)
 #define _(id,n,crc) \
     const char *id ## _CRC = #n "_" #crc; \
     const u32 id = vl_api_get_msg_index((u8 *)(id ## _CRC)); \
-    printf("%s = %d\n", id ## _CRC, id); \
     (void )id;
     foreach_vl_msg_name_crc_vpe;
     foreach_vl_msg_name_crc_interface;
